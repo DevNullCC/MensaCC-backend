@@ -1,6 +1,16 @@
 // api/update.js
 
 export default async function handler(req, res) {
+    // --- INIZIO: CORS ---
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  if (req.method === 'OPTIONS') {
+    res.status(200).end();
+    return;
+  }
+  // --- FINE: CORS ---
+  
   if (req.method !== 'POST') {
     res.status(405).json({ message: 'Only POST allowed' });
     return;
