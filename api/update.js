@@ -1,7 +1,17 @@
 // api/update.js
 
+import formidable from "formidable";
+import fs from "fs";
+import { Buffer } from "buffer";
+
+// Disabilita il body parser di Vercel per usare formidable
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
+
 export default async function handler(req, res) {
-    // --- INIZIO: CORS ---
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -9,74 +19,98 @@ export default async function handler(req, res) {
     res.status(200).end();
     return;
   }
-  // --- FINE: CORS ---
-  
+
   if (req.method !== 'POST') {
     res.status(405).json({ message: 'Only POST allowed' });
     return;
   }
 
-  const { message } = req.body;
-
-  if (!message) {
-    res.status(400).json({ message: 'Message required' });
-    return;
-  }
-
-  // Variabili principali
-  const OWNER = 'DevNullCC';
-  const REPO = 'MensaCC';
-  const PATH = 'Mess.txt';
-
-  // Token come secret ENV (mai metterlo nel codice!)
-  const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
-
-  // 1. Recupera SHA attuale del file (obbligatorio per update)
-  const fileResp = await fetch(
-    `https://api.github.com/repos/${OWNER}/${REPO}/contents/${PATH}`,
-    {
-      headers: {
-        Authorization: `token ${GITHUB_TOKEN}`,
-        Accept: 'application/vnd.github.v3+json'
-      }
+  // Usa formidable per gestire FormData con file
+  const form = new formidable.IncomingForm();
+  form.parse(req, async (err, fields, files) => {
+    if (err) {
+      res.status(500).json({ message: "Errore nel parsing del form", err });
+      return;
     }
-  );
 
-  if (!fileResp.ok) {
-    const err = await fileResp.text();
-    res.status(fileResp.status).json({ message: 'Errore GET file', err });
-    return;
-  }
+    const giornoMenu = fields.giornoMenu;
+    const dataReale = fields.dataReale;
+    const excelFile = files.excel;
 
-  const fileData = await fileResp.json();
+    if (!giornoMenu || !dataReale || !excelFile) {
+      res.status(400).json({ message: "Tutti i campi sono obbligatori" });
+      return;
+    }
 
-  // 2. Codifica il nuovo messaggio in base64
-  const base64content = Buffer.from(message, 'utf-8').toString('base64');
+    // Leggi il file Excel come buffer
+    const excelBuffer = fs.readFileSync(excelFile.filepath);
+    const excelBase64 = excelBuffer.toString("base64");
 
-  // 3. Aggiorna il file su GitHub
-  const updateResp = await fetch(
-    `https://api.github.com/repos/${OWNER}/${REPO}/contents/${PATH}`,
-    {
-      method: 'PUT',
+    // Prepara info per GitHub
+    const OWNER = "DevNullCC";
+    const REPO = "MensaCC";
+    const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+
+    // 1. Aggiorna/salva menu.xlsx
+    const menuPath = "menu.xlsx";
+    // Recupera SHA (serve per update via API)
+    const getMenu = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/contents/${menuPath}`, {
+      headers: { Authorization: `token ${GITHUB_TOKEN}` }
+    });
+    let menuSha = null;
+    if (getMenu.ok) {
+      const menuJson = await getMenu.json();
+      menuSha = menuJson.sha;
+    }
+    const menuBody = {
+      message: "Aggiornamento menu.xlsx via backend",
+      content: excelBase64,
+      ...(menuSha && { sha: menuSha })
+    };
+    const putMenu = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/contents/${menuPath}`, {
+      method: "PUT",
       headers: {
         Authorization: `token ${GITHUB_TOKEN}`,
-        Accept: 'application/vnd.github.v3+json',
-        'Content-Type': 'application/json'
+        "Content-Type": "application/json"
       },
-      body: JSON.stringify({
-        message: 'Aggiornamento via API MensaCC-backend',
-        content: base64content,
-        sha: fileData.sha
-      })
+      body: JSON.stringify(menuBody)
+    });
+    if (!putMenu.ok) {
+      res.status(500).json({ message: "Errore salvataggio menu.xlsx" });
+      return;
     }
-  );
 
-  if (!updateResp.ok) {
-    const err = await updateResp.text();
-    res.status(updateResp.status).json({ message: 'Errore PUT file', err });
-    return;
-  }
+    // 2. Aggiorna day_to_start.txt
+    const txtPath = "day_to_start.txt";
+    // Recupera SHA
+    const getTxt = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/contents/${txtPath}`, {
+      headers: { Authorization: `token ${GITHUB_TOKEN}` }
+    });
+    let txtSha = null;
+    if (getTxt.ok) {
+      const txtJson = await getTxt.json();
+      txtSha = txtJson.sha;
+    }
+    const txtContent = `${giornoMenu},${dataReale}`;
+    const txtBase64 = Buffer.from(txtContent, "utf-8").toString("base64");
+    const txtBody = {
+      message: "Aggiornamento day_to_start.txt via backend",
+      content: txtBase64,
+      ...(txtSha && { sha: txtSha })
+    };
+    const putTxt = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/contents/${txtPath}`, {
+      method: "PUT",
+      headers: {
+        Authorization: `token ${GITHUB_TOKEN}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(txtBody)
+    });
+    if (!putTxt.ok) {
+      res.status(500).json({ message: "Errore salvataggio day_to_start.txt" });
+      return;
+    }
 
-  const updateData = await updateResp.json();
-  res.status(200).json({ message: 'File aggiornato con successo!', updateData });
+    res.status(200).json({ message: "Tutto aggiornato con successo!" });
+  });
 }
